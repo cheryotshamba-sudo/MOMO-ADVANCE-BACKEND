@@ -11,23 +11,27 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 10000;
 
-const AUTOPAY_URL =
-    "https://autopay.co.ke/api/global/uganda";
+// OptimaPay Global API
+const OPTIMAPAY_URL =
+    "https://global.optimapaybridge.co.ke/api/v2";
 
-const AUTOPAY_SECRET_KEY =
-    process.env.AUTOPAY_SECRET_KEY;
+const OPTIMAPAY_API_KEY =
+    process.env.OPTIMAPAY_API_KEY;
+
+const OPTIMAPAY_API_SECRET =
+    process.env.OPTIMAPAY_API_SECRET;
 
 
 // Test that the server is running
 app.get("/", (req, res) => {
     res.json({
         success: true,
-        message: "AUTOPAY Uganda backend is running"
+        message: "OptimaPay Global Uganda backend is running"
     });
 });
 
 
-// Send Uganda STK Push
+// Send Uganda MTN/Airtel payment prompt
 app.post("/api/payment", async (req, res) => {
 
     try {
@@ -41,10 +45,17 @@ app.post("/api/payment", async (req, res) => {
             });
         }
 
-        const cleanPhone = String(phone)
+        // Clean phone number
+        let cleanPhone = String(phone)
             .replace(/\s+/g, "")
             .replace(/^\+/, "");
 
+        // Convert 0772XXXXXX -> 256772XXXXXX
+        if (/^0\d{9}$/.test(cleanPhone)) {
+            cleanPhone = "256" + cleanPhone.substring(1);
+        }
+
+        // Validate Uganda number
         if (!/^256\d{9}$/.test(cleanPhone)) {
             return res.status(400).json({
                 success: false,
@@ -54,30 +65,49 @@ app.post("/api/payment", async (req, res) => {
 
         const numericAmount = Number(amount);
 
-        if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
+        // OptimaPay minimum amount is 500
+        if (
+            !Number.isFinite(numericAmount) ||
+            numericAmount < 500
+        ) {
             return res.status(400).json({
                 success: false,
-                message: "Invalid payment amount"
+                message: "Payment amount must be at least UGX 500"
             });
         }
 
+        // Unique reference for this payment
+        const reference =
+            "MOMO-" +
+            Date.now() +
+            "-" +
+            Math.floor(Math.random() * 10000);
+
+        // Your Render webhook URL
+        const callbackUrl =
+            `${process.env.BACKEND_URL}/api/webhook`;
+
         const response = await axios.post(
-            `${AUTOPAY_URL}/stk-push`,
+            `${OPTIMAPAY_URL}/collecto/initiate`,
             {
                 phone: cleanPhone,
-                amount: numericAmount
+                amount: numericAmount,
+                reference: reference,
+                description: "MoMo Advanc Payment",
+                callback_url: callbackUrl
             },
             {
                 headers: {
-                    Authorization:
-                        `Bearer ${AUTOPAY_SECRET_KEY}`,
-                    "Content-Type": "application/json"
+                    "X-API-KEY": OPTIMAPAY_API_KEY,
+                    "X-API-SECRET": OPTIMAPAY_API_SECRET,
+                    "Content-Type": "application/json",
+                    "Accept": "application/json"
                 }
             }
         );
 
         console.log(
-            "AUTOPAY RESPONSE:",
+            "OPTIMAPAY INITIATE RESPONSE:",
             response.data
         );
 
@@ -86,7 +116,7 @@ app.post("/api/payment", async (req, res) => {
     } catch (error) {
 
         console.error(
-            "AUTOPAY ERROR:",
+            "OPTIMAPAY INITIATE ERROR:",
             error.response?.data || error.message
         );
 
@@ -102,26 +132,85 @@ app.post("/api/payment", async (req, res) => {
 });
 
 
+// OptimaPay webhook
+app.post("/api/webhook", (req, res) => {
+
+    try {
+
+        console.log(
+            "OPTIMAPAY WEBHOOK:",
+            req.body
+        );
+
+        const {
+            event,
+            transaction_id,
+            reference,
+            client_reference,
+            amount,
+            phone,
+            status,
+            completed_at
+        } = req.body;
+
+        console.log("Payment event:", event);
+        console.log("Transaction ID:", transaction_id);
+        console.log("Reference:", reference);
+        console.log("Client Reference:", client_reference);
+        console.log("Amount:", amount);
+        console.log("Phone:", phone);
+        console.log("Status:", status);
+        console.log("Completed:", completed_at);
+
+        // Always acknowledge the webhook
+        return res.json({
+            success: true,
+            received: true
+        });
+
+    } catch (error) {
+
+        console.error(
+            "WEBHOOK ERROR:",
+            error.message
+        );
+
+        return res.status(500).json({
+            success: false,
+            message: "Webhook processing error"
+        });
+    }
+});
+
+
 // Check transaction status
 app.get("/api/payment/status/:id", async (req, res) => {
 
     try {
 
-        const transactionId = req.params.id;
+        const identifier = req.params.id;
+
+        if (!identifier) {
+            return res.status(400).json({
+                success: false,
+                message: "Transaction identifier is required"
+            });
+        }
 
         const response = await axios.get(
-            `${AUTOPAY_URL}/status/${encodeURIComponent(transactionId)}`,
+            `${OPTIMAPAY_URL}/collecto/status/${encodeURIComponent(identifier)}`,
             {
                 headers: {
-                    Authorization:
-                        `Bearer ${AUTOPAY_SECRET_KEY}`,
-                    "Content-Type": "application/json"
+                    "X-API-KEY": OPTIMAPAY_API_KEY,
+                    "X-API-SECRET": OPTIMAPAY_API_SECRET,
+                    "Content-Type": "application/json",
+                    "Accept": "application/json"
                 }
             }
         );
 
         console.log(
-            "AUTOPAY STATUS:",
+            "OPTIMAPAY STATUS:",
             response.data
         );
 
@@ -130,7 +219,7 @@ app.get("/api/payment/status/:id", async (req, res) => {
     } catch (error) {
 
         console.error(
-            "STATUS ERROR:",
+            "OPTIMAPAY STATUS ERROR:",
             error.response?.data || error.message
         );
 
@@ -148,6 +237,6 @@ app.get("/api/payment/status/:id", async (req, res) => {
 
 app.listen(PORT, () => {
     console.log(
-        `AUTOPAY backend running on port ${PORT}`
+        `OptimaPay Global backend running on port ${PORT}`
     );
 });
